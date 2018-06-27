@@ -1,10 +1,9 @@
-import random
-
 from absl import app
 from pysc2.agents import base_agent
 from pysc2.env import sc2_env
 from pysc2.lib import features, actions, units
 
+import Orders as Order
 from SCQueue import SCQueue
 
 _SCREEN_SIZE = 84
@@ -31,16 +30,17 @@ class TerranBot(base_agent.BaseAgent):
         super(TerranBot, self).__init__()
         self.base_top_left = False
         self.init_order_list = [_NO_OP,
-                                _BUILD_SVC, _BUILD_UNIT, _BUILD_UNIT, _BUILD_UNIT, _BUILD_UNIT,
+                                # _BUILD_SVC, _BUILD_UNIT, _BUILD_UNIT, _BUILD_UNIT, _BUILD_UNIT,
                                 _BUILD_BUILDING, _BUILD_BUILDING, _BUILD_BUILDING]
         self.order = ""
         self.order_step = 0
         self.order_done = True
 
         # Need to add building of extractor.
-        self.building_queue = SCQueue(['TechLab_Barracks', 'Barracks', 'SupplyDepot'],
+        self.building_queue = SCQueue(['TechLab_Barracks', 'Refinery', 'Barracks', 'SupplyDepot'],
                                       {'Barracks': actions.FUNCTIONS.Build_Barracks_screen.id,
                                        'SupplyDepot': actions.FUNCTIONS.Build_SupplyDepot_screen.id,
+                                       'Refinery': actions.FUNCTIONS.Build_Refinery_screen.id,
                                        'TechLab_Barracks': actions.FUNCTIONS.Build_TechLab_Barracks_quick.id})
         self.unit_queue = SCQueue(['TrainMarauder', 'TrainMarine', 'TrainMarine', 'TrainMarine', 'TrainMarine'],
                                   {'TrainMarine': actions.FUNCTIONS.Train_Marine_quick.id})
@@ -56,12 +56,10 @@ class TerranBot(base_agent.BaseAgent):
 
     def update_order(self, obs):
         if obs.first():
-            cmd = random.choice(self.get_units_by_type(obs, units.Terran.CommandCenter))
-            player_x, player_y = (
-                    obs.observation.feature_minimap.player_relative == features.PlayerRelative.SELF).nonzero()
-            meanx, meany = player_x.mean(), player_y.mean()
+            cmd = Order.get_one_unit_by_type(obs, units.Terran.CommandCenter)
+            player_x, player_y = (obs.observation.feature_minimap.player_relative == features.PlayerRelative.SELF).nonzero()
             if player_y.mean() <= 31:
-                print(cmd[features.FeatureUnit.y])
+                print(cmd.y)
                 self.base_top_left = True
 
         if len(self.init_order_list) > 0:
@@ -77,146 +75,34 @@ class TerranBot(base_agent.BaseAgent):
     def do_order(self, obs):
         """Each order function will have to deal with updating order_step & order_done"""
         if self.order == _BUILD_BUILDING:
-            return self.order_build_building(obs)
+            step, action = Order.order_build_building(obs, self.base_top_left, self.building_queue.last_in_obs(), self.building_queue.get_last_action(), self.order_step)
+            return self.update_order_step(action, step)
 
         elif self.order == _BUILD_UNIT:
-            return self.order_build_unit(obs)
+            step, action = Order.order_build_unit(obs, self.order_step, self.unit_queue.get_last_action(), self.unit_queue.last_in_obs())
+            return self.update_order_step(action, step)
 
         elif self.order == _BUILD_SVC:
-            return self.order_build_svc(obs)
+            step, action = Order.order_build_svc(obs, self.order_step)
+            return self.update_order_step(action, step)
 
         elif self.order == _RESEARCH:
-            return self.order_research(obs)
+            step, action = Order.order_research()
+            return self.update_order_step(action, step)
 
         else:  # noop is implicit
             return actions.FUNCTIONS.no_op()
 
-    def order_build_building(self, obs):
-        if self.order_step == 0:
-            building = self.building_queue.get_last_action()
-
-            if building in ['SupplyDepot', 'Barracks']:  # Select svcs
-                ok, select_svc_action = self.select_unit__by_type(obs, units.Terran.SCV)
-                if ok:
-                    self.order_step += 1
-                    return select_svc_action
-
-            elif building in ['TechLab_Barracks', 'Reactor_Barracks']:  # Select the barracks to upgrade.
-                ok, select_bck_action = self.select_unit__by_type(obs, units.Terran.Barracks)
-                if ok:
-                    self.order_step += 1
-                    return select_bck_action
-
-            return actions.FUNCTIONS.no_op()
-        # Build SupplyDepot, Barracks, etc.
-        if self.order_step == 1 and self.unit_type_is_selected(obs, units.Terran.SCV):
-            if self.building_queue.last_in_obs(obs):
-                self.order_step = 0
-                self.order_done = True
-                building = self.building_queue.pop_action()
-                command = self.get_units_by_type(obs, units.Terran.CommandCenter)
-
-                if len(command) > 0:
-                    cmd = random.choice(command)
-                    cmdx, cmdy = cmd[features.FeatureUnit.x], cmd[features.FeatureUnit.y]
-                    print(cmdx, cmdy, cmd[0], cmd[1])
-                    if building == 'SupplyDepot':
-                        x, y = self.transform_offset(cmdx, 10, cmdy, -15)
-                        return actions.FUNCTIONS.Build_SupplyDepot_screen("now", (x, y))
-
-                    elif building == 'Barracks':
-                        x, y = self.transform_offset(cmdx, -15, cmdy, -15)
-                        return actions.FUNCTIONS.Build_Barracks_screen("now", (x, y))
-        # Build TechLabs, Reactors, etc.
-        elif self.order_step == 1 and self.unit_type_is_selected(obs, units.Terran.Barracks):
-            if self.building_queue.last_in_obs(obs):
-                self.order_step = 0
-                self.order_done = True
-                return actions.FUNCTIONS.Build_Techlab_Barrack_quick("now")
-
-        return actions.FUNCTIONS.no_op()
-
-    def order_build_unit(self, obs):
-        if self.order_step == 0:
-            # To find out what building to select.
-            unit_order = self.unit_queue.get_last_action()
-
-            if unit_order in ['TrainMarine', 'TrainMarauder']:  # Select the barracks
-                ok, action = self.select_unit__by_type(obs, units.Terran.Barracks)
-                if ok:
-                    self.order_step += 1
-                    return action
-        elif self.order_step == 1:
-            if self.unit_queue.last_in_obs(obs):
-                unit_order = self.unit_queue.pop_action()
-                self.order_step = 0
-                self.order_done = True
-
-                if unit_order == 'TrainMarine':
-                    return actions.FUNCTIONS.Train_Marine_quick("now")
-                elif unit_order == 'TrainMarauder':
-                    return actions.FUNCTIONS.Train_Marauder_quick("now")
-
-            elif not self.unit_type_is_selected(obs, units.Terran.Barracks):
-                self.order_step = 0
-
-        return actions.FUNCTIONS.no_op()
-
-    def order_build_svc(self, obs):
-        if self.order_step == 0:
-            ok, cmd_select_action = self.select_unit__by_type(obs, units.Terran.CommandCenter)
-            if ok:
-                self.order_step += 1
-                return cmd_select_action
-
-        elif self.order_step == 1:
-            if actions.FUNCTIONS.Train_SCV_quick.id in obs.observation.available_actions:
-                self.order_step = 0
-                self.order_done = True
-                return actions.FUNCTIONS.Train_SCV_quick("now")
-
-            self.order_done = True
-        return actions.FUNCTIONS.no_op()
-
-    def order_research(self, obs):
-        if self.order_step == 0:
-            pass
-        return actions.FUNCTIONS.no_op()
-
     # ---------- Utility Methods ----------
 
-    def select_unit__by_type(self, obs, unit_type):
-        """This method wil return an action that sects a unit of the given type. This method will not step orders"""
-        the_units = self.get_units_by_type(obs, unit_type)
-        if len(the_units) > 0:
-            unit = random.choice(the_units)
-            return [True, actions.FUNCTIONS.select_point("select_all_type",
-                                                         (unit[features.FeatureUnit.x], unit[features.FeatureUnit.y]))]
-
-        return [False, actions.FUNCTIONS.no_op()]
-
-    def transform_offset(self, x, x_offset, y, y_offset):
-        if self.base_top_left:
-            return [x - x_offset, y - y_offset]
-
-        return [x + x_offset, y + y_offset]
-
-    @staticmethod
-    def get_units_by_type(obs, unit_type):
-        return [unit for unit in obs.observation.feature_units
-                if unit.unit_type == unit_type]
-
-    @staticmethod
-    def unit_type_is_selected(obs, unit_type):
-        if (len(obs.observation.single_select) > 0 and
-                obs.observation.single_select[0].unit_type == unit_type):
-            return True
-
-        if (len(obs.observation.multi_select) > 0 and
-                obs.observation.multi_select[0].unit_type == unit_type):
-            return True
-
-        return False
+    def update_order_step(self, action, step):
+        if step == -1:
+            self.order_done = True
+            self.order_step = 0
+            self.building_queue.pop_action()
+        else:
+            self.order_step = int(step)
+        return action
 
 
 def main(argv):

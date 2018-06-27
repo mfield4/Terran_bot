@@ -15,9 +15,9 @@ class SCQueue:
 
         return "NoOp"
 
-    def last_in_obs(self, obs):
+    def last_in_obs(self):
         queue_len = len(self.build_queue)
 
         if queue_len > 0:
-            return self.build_ids[self.build_queue[queue_len - 1]] in obs.observation.available_actions
-        return False
+            return self.build_ids[self.build_queue[queue_len - 1]]
+        return 0
