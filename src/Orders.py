@@ -1,121 +1,97 @@
-import random
+from pysc2.lib import actions, units
 
-from pysc2.lib import features, actions, units
+import SC2Util as Util
 
 
 # --------- Orders ---------
 
-def order_build_building(obs, base, action_id, building: str, step: int):
-    """Input: The name of the building to be built, and where to build it.
-        select_helper will select the appropriate unit and inc the step.
-        build_helper will return the build function. Offsets are hardcoded here"""
-    if step == 0:
-        return build_building_select_helper(obs, building)
+class Orders:
+    def __init__(self):
+        self.base = False
+        self.order_step = 0
+        self.order_done = True
 
-    elif step == 1:
-        if action_id in obs.observation.available_actions:
-            return build_building_build_helper(obs, building, base)
+    def update_order_step(self, action, step):
+        if step == -1:
+            self.order_done = True
+            self.order_step = 0
+        else:
+            self.order_step = int(step)
+        return action
 
-    return [0, actions.FUNCTIONS.no_op()]
+    def order_build_building(self, obs, building, action_id):
+        """Input: The name of the building to be built, and where to build it.
+            select_helper will select the appropriate unit and inc the step.
+            build_helper will return the build function. Offsets are hardcoded here"""
+        step, action = 0, actions.FUNCTIONS.no_op()
+        if self.order_step == 0:
+            step, action = build_building_select_helper(obs, building)
 
+        elif self.order_step == 1:
+            # print(obs.observation.available_actions)
+            if action_id in obs.observation.available_actions:
+                step, action = build_building_build_helper(obs, self.base, building)
 
-def order_build_unit(obs, step, unit, action_id):
-    if step == 0:
-        # To find out what building to select.
-        if unit in ['TrainMarine', 'TrainMarauder']:  # Select the barracks
-            return select_unit_by_type(obs, units.Terran.Barracks)
-    elif step == 1:
-        if action_id in obs.observation.available_actions:
+        return self.update_order_step(action, step)
 
-            if unit == 'TrainMarine':
-                return [-1, actions.FUNCTIONS.Train_Marine_quick("now")]
-            elif unit == 'TrainMarauder':
-                return [-1, actions.FUNCTIONS.Train_Marauder_quick("now")]
+    def order_build_unit(self, obs, unit, action_id):
+        step, action = 0, actions.FUNCTIONS.no_op()
+        if self.order_step == 0:
+            # To find out what building to select.
+            if unit in ['TrainMarine', 'TrainMarauder']:  # Select the barracks
+                step, action = Util.select_one_unit_by_type(obs, units.Terran.Barracks)
 
-    return [0, actions.FUNCTIONS.no_op()]
+        elif self.order_step == 1:
+            if action_id in obs.observation.available_actions:
 
+                if unit == 'TrainMarine':
+                    step, action = [-1, actions.FUNCTIONS.Train_Marine_quick("now")]
+                elif unit == 'TrainMarauder':
+                    step, action = [-1, actions.FUNCTIONS.Train_Marauder_quick("now")]
 
-def order_build_svc(obs, step):
-    if step == 0:
-        return select_unit_by_type(obs, units.Terran.CommandCenter)
+        return self.update_order_step(action, step)
 
-    elif step == 1:
-        if actions.FUNCTIONS.Train_SCV_quick.id in obs.observation.available_actions:
-            return [-1, actions.FUNCTIONS.Train_SCV_quick("now")]
+    def order_build_svc(self, obs):
+        step, action = 0, actions.FUNCTIONS.no_op()
+        if self.order_step == 0:
+            step, action = Util.select_one_unit_by_type(obs, units.Terran.CommandCenter)
 
-    return [0, actions.FUNCTIONS.no_op()]
+        elif self.order_step == 1:
+            if actions.FUNCTIONS.Train_SCV_quick.id in obs.observation.available_actions:
+                step, action = [-1, actions.FUNCTIONS.Train_SCV_quick("now")]
+        return self.update_order_step(action, step)
 
 
 # ---------- Order Helpers --------- Likely for some to be refactored to a utility file later on.
 
-
-def build_building_build_helper(obs, building, base):
-    if building == 'SupplyDepot':
-        cmd = get_one_unit_by_type(obs, units.Terran.CommandCenter)
-        x, y = transform_offset(base, cmd.x, 10, cmd.y, -15)
-        return [-1, actions.FUNCTIONS.Build_SupplyDepot_screen("now", (x, y))]
-
-    elif building == 'Barracks':
-        cmd = get_one_unit_by_type(obs, units.Terran.CommandCenter)
-        x, y = transform_offset(base, cmd.x, -17, cmd.y, -17)
-        return [-1, actions.FUNCTIONS.Build_Barracks_screen("now", (x, y))]
-
-    elif building == 'Refinery':
-        geyser = get_one_unit_by_type(obs, units.Neutral.VespeneGeyser)
-        return [-1, actions.FUNCTIONS.Build_Refinery_screen("now", (geyser.x, geyser.y))]
-
-    return [1, actions.FUNCTIONS.no_op()]
-
-
 def build_building_select_helper(obs, building):
     if building in ['SupplyDepot', 'Barracks', 'Refinery']:  # Select svcs
-        return select_unit_by_type(obs, units.Terran.SCV)
+        return Util.select_one_unit_by_type(obs, units.Terran.SCV)
 
-    elif building in ['TechLab_Barracks', 'Reactor_Barracks']:  # Select the barracks to upgrade.
-        return select_unit_by_type(obs, units.Terran.Barracks)
+    elif building in ['TechLab', 'Reactor']:  # Select the barracks to upgrade.
+        return Util.select_one_unit_by_type(obs, units.Terran.Barracks)
 
     return [0, actions.FUNCTIONS.no_op()]
 
 
-def select_unit_by_type(obs, unit_type):
-    """This method wil return an action that sects a unit of the given type. This method will not step orders"""
-    my_units = [unit for unit in obs.observation.feature_units
-                if unit.unit_type == unit_type]
-    if len(my_units):
-        unit = random.choice(my_units)
-        return [True, actions.FUNCTIONS.select_point("select",
-                                                     (unit[features.FeatureUnit.x], unit[features.FeatureUnit.y]))]
+def build_building_build_helper(obs, base, building):
+    if building == 'SupplyDepot':
+        cmd = Util.get_one_unit_by_type(obs, units.Terran.CommandCenter)
+        x, y = Util.transform_offset(base, cmd.x, 10, cmd.y, -15)
+        return [-1, actions.FUNCTIONS.Build_SupplyDepot_screen("now", (x, y))]
+    elif building == 'Barracks':
+        cmd = Util.get_one_unit_by_type(obs, units.Terran.CommandCenter)
+        x, y = Util.transform_offset(base, cmd.x, -17, cmd.y, -17)
+        return [-1, actions.FUNCTIONS.Build_Barracks_screen("now", (x, y))]
+    elif building == 'Refinery':
+        geyser = Util.get_one_unit_by_type(obs, units.Neutral.VespeneGeyser)
+        return [-1, actions.FUNCTIONS.Build_Refinery_screen("now", (geyser.x, geyser.y))]
+    elif building == 'TechLab':
+        bcks = Util.get_one_unit_by_type(obs, units.Terran.Barracks)
+        return [-1, actions.FUNCTIONS.Build_TechLab_screen("now", (bcks.x, bcks.y))]
+    elif building == 'Reactor':
+        return [-1, actions.FUNCTIONS.Build_Reactor_screen("now")]
 
-    return [False, actions.FUNCTIONS.no_op()]
+    return [0, actions.FUNCTIONS.no_op()]
 
-
-def get_one_unit_by_type(obs, unit_type):
-    my_units = [unit for unit in obs.observation.feature_units
-                if unit.unit_type == unit_type]
-    if len(my_units):
-        return random.choice(my_units)
-    return None
-
-
-def get_units_by_type(obs, unit_type):
-    return [unit for unit in obs.observation.feature_units
-            if unit.unit_type == unit_type]
-
-
-def unit_type_is_selected(obs, unit_type):
-    if (len(obs.observation.single_select) > 0 and
-            obs.observation.single_select[0].unit_type == unit_type):
-        return True
-
-    if (len(obs.observation.multi_select) > 0 and
-            obs.observation.multi_select[0].unit_type == unit_type):
-        return True
-
-    return False
-
-
-def transform_offset(base_top_left, x, x_offset, y, y_offset):
-    if base_top_left:
-        return [x - x_offset, y - y_offset]
-
-    return [x + x_offset, y + y_offset]
+# ----------- Utility Functions ---------

@@ -3,7 +3,8 @@ from pysc2.agents import base_agent
 from pysc2.env import sc2_env
 from pysc2.lib import features, actions, units
 
-import Orders as Order
+import SC2Util as Util
+from Orders import Orders
 from SCQueue import SCQueue
 
 _SCREEN_SIZE = 84
@@ -19,6 +20,7 @@ _BUILD_BUILDING = "build_building"
 _BUILD_UNIT = "build_unit"
 _BUILD_SVC = "build_svc"
 _RESEARCH = "research"
+_DEFEND = "Defend"
 _NO_OP = "NoOp"
 
 
@@ -29,26 +31,26 @@ class TerranBot(base_agent.BaseAgent):
     def __init__(self):
         super(TerranBot, self).__init__()
         self.base_top_left = False
-        self.init_order_list = [_NO_OP,
-                                # _BUILD_SVC, _BUILD_UNIT, _BUILD_UNIT, _BUILD_UNIT, _BUILD_UNIT,
-                                _BUILD_BUILDING, _BUILD_BUILDING, _BUILD_BUILDING]
+        self.order_handler = Orders()
         self.order = ""
-        self.order_step = 0
-        self.order_done = True
+        self.init_order_list = [_NO_OP,
+                                _BUILD_SVC, _BUILD_UNIT, _BUILD_UNIT, _BUILD_UNIT, _BUILD_UNIT, _BUILD_UNIT,
+                                _BUILD_BUILDING, _BUILD_BUILDING, _BUILD_BUILDING, _BUILD_BUILDING]
 
         # Need to add building of extractor.
-        self.building_queue = SCQueue(['TechLab_Barracks', 'Refinery', 'Barracks', 'SupplyDepot'],
+        self.building_queue = SCQueue(['TechLab', 'Refinery', 'Barracks', 'SupplyDepot'],
                                       {'Barracks': actions.FUNCTIONS.Build_Barracks_screen.id,
                                        'SupplyDepot': actions.FUNCTIONS.Build_SupplyDepot_screen.id,
                                        'Refinery': actions.FUNCTIONS.Build_Refinery_screen.id,
-                                       'TechLab_Barracks': actions.FUNCTIONS.Build_TechLab_Barracks_quick.id})
+                                       'TechLab': actions.FUNCTIONS.Build_TechLab_screen.id})
         self.unit_queue = SCQueue(['TrainMarauder', 'TrainMarine', 'TrainMarine', 'TrainMarine', 'TrainMarine'],
-                                  {'TrainMarine': actions.FUNCTIONS.Train_Marine_quick.id})
+                                  {'TrainMarine': actions.FUNCTIONS.Train_Marine_quick.id,
+                                   'TrainMarauder': actions.FUNCTIONS.Train_Marauder_quick.id})
         self.research_queue = SCQueue([], {})
 
     def step(self, obs):
         super(TerranBot, self).step(obs)
-        if self.order_done:
+        if self.order_handler.order_done:
             self.update_order(obs)
         return self.do_order(obs)
 
@@ -56,53 +58,48 @@ class TerranBot(base_agent.BaseAgent):
 
     def update_order(self, obs):
         if obs.first():
-            cmd = Order.get_one_unit_by_type(obs, units.Terran.CommandCenter)
+            cmd = Util.get_one_unit_by_type(obs, units.Terran.CommandCenter)
             player_x, player_y = (obs.observation.feature_minimap.player_relative == features.PlayerRelative.SELF).nonzero()
             if player_y.mean() <= 31:
                 print(cmd.y)
                 self.base_top_left = True
+                self.order_handler.base = True
 
         if len(self.init_order_list) > 0:
             self.order = self.init_order_list.pop()
-            self.order_done = False
-            self.order_step = 0
+            self.order_handler.order_done = False
+            self.order_handler.order_step = 0
         else:
             # self.order = random.choice([_BUILD_BUILDING, _BUILD_UNIT, _BUILD_SVC, _NO_OP, _NO_OP, _NO_OP])
             self.order = _NO_OP
-            self.order_done = True
-            self.order_step = 0
+            # self.order_done = True
+            # self.order_step = 0
 
     def do_order(self, obs):
         """Each order function will have to deal with updating order_step & order_done"""
         if self.order == _BUILD_BUILDING:
-            step, action = Order.order_build_building(obs, self.base_top_left, self.building_queue.last_in_obs(), self.building_queue.get_last_action(), self.order_step)
-            return self.update_order_step(action, step)
+            action = self.order_handler.order_build_building(obs, self.building_queue.get_last_action(), self.building_queue.last_in_obs())
+            if self.order_handler.order_done:
+                self.building_queue.pop_action()
+            return action
 
         elif self.order == _BUILD_UNIT:
-            step, action = Order.order_build_unit(obs, self.order_step, self.unit_queue.get_last_action(), self.unit_queue.last_in_obs())
-            return self.update_order_step(action, step)
+            action = self.order_handler.order_build_unit(obs, self.unit_queue.get_last_action(), self.unit_queue.last_in_obs())
+            if self.order_handler.order_done:
+                self.unit_queue.pop_action()
+            return action
 
         elif self.order == _BUILD_SVC:
-            step, action = Order.order_build_svc(obs, self.order_step)
-            return self.update_order_step(action, step)
+            return self.order_handler.order_build_svc(obs)
 
         elif self.order == _RESEARCH:
-            step, action = Order.order_research()
-            return self.update_order_step(action, step)
-
+            pass
+        elif self.order == _DEFEND:
+            pass
         else:  # noop is implicit
             return actions.FUNCTIONS.no_op()
 
     # ---------- Utility Methods ----------
-
-    def update_order_step(self, action, step):
-        if step == -1:
-            self.order_done = True
-            self.order_step = 0
-            self.building_queue.pop_action()
-        else:
-            self.order_step = int(step)
-        return action
 
 
 def main(argv):
